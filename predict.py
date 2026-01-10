@@ -8,7 +8,7 @@ SAM 3 Features:
 - Unified detection, segmentation, and tracking
 - Released November 2025 by Meta
 
-Weights are downloaded from Hugging Face: facebook/sam3
+Weights are baked into the Docker image during build.
 """
 
 from cog import BasePredictor, Input, Path
@@ -17,7 +17,6 @@ import numpy as np
 from PIL import Image
 import os
 import json
-from shapely.geometry import shape, mapping
 from rasterio import features
 import cv2
 
@@ -28,47 +27,39 @@ class Predictor(BasePredictor):
         print(f"Using device: {self.device}")
         
         # SAM 3 weights are baked into the Docker image during build
-        # They are downloaded from HuggingFace in the GitHub Action workflow
         model_path = "/src/sam3.pt"  # Baked into image by Cog
         
         if not os.path.exists(model_path):
-            # Fallback: try current directory
             model_path = "sam3.pt"
         
         if not os.path.exists(model_path):
             raise FileNotFoundError(
-                "SAM 3 weights not found. The model file should be baked into the Docker image during build. "
-                "Check the GitHub Action workflow."
+                "SAM 3 weights not found. The model file should be baked into the Docker image during build."
             )
         
         print(f"Loading SAM 3 weights from: {model_path}")
         
-        # Load SAM 3 model
-        # SAM 3 uses a DETR-based architecture with concept prompting
+        # Try loading with segment-geospatial (samgeo)
         try:
-            from sam3 import SAM3, SAM3Config
-            
-            config = SAM3Config()
-            self.model = SAM3(config)
-            
-            checkpoint = torch.load(model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint["model"])
-            self.model.to(self.device)
-            self.model.eval()
-            print("SAM 3 model loaded successfully")
-            
-        except ImportError:
+            from samgeo import SamGeo2
+            self.model = SamGeo2(model_path)
+            self.use_samgeo = True
+            print("SAM 3 model loaded with samgeo")
+        except Exception as e:
+            print(f"samgeo failed: {e}")
             # Fallback: Try using the Ultralytics implementation
             print("Using Ultralytics SAM implementation...")
             from ultralytics import SAM
             self.model = SAM(model_path)
-            self.use_ultralytics = True
+            self.use_samgeo = False
+        
+        print("SAM 3 model loaded successfully")
             
     def predict(
         self,
         image: Path = Input(description="Input satellite/aerial image to segment"),
         prompt: str = Input(
-            description="Concept prompt - describe objects to extract (e.g., 'swimming pools', 'solar panels', 'yellow school bus')", 
+            description="Describe objects to extract (e.g., 'buildings', 'swimming pools', 'solar panels')", 
             default=""
         ),
         threshold: float = Input(description="Confidence threshold for detections", default=0.5),
@@ -77,9 +68,6 @@ class Predictor(BasePredictor):
     ) -> dict:
         """
         Run SAM 3 with Promptable Concept Segmentation (PCS)
-        
-        SAM 3 can detect and segment ALL instances of a visual concept
-        specified by short noun phrases, image exemplars, or both.
         """
         
         # 1. Load image
@@ -89,53 +77,55 @@ class Predictor(BasePredictor):
         print(f"Processing image: {w}x{h} with prompt: '{prompt}'")
         
         # 2. Run SAM 3 inference
-        if hasattr(self, 'use_ultralytics') and self.use_ultralytics:
-            # Ultralytics SAM path
-            results = self.model(
-                img_np,
-                prompts=[prompt] if prompt else None,
-                conf=threshold
-            )
-            masks = results[0].masks.data.cpu().numpy() if results[0].masks else np.array([])
-        else:
-            # Native SAM 3 path
-            with torch.no_grad():
-                # Prepare input
-                img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-                img_tensor = img_tensor.to(self.device)
-                
-                # Run concept segmentation
-                outputs = self.model.predict_concepts(
-                    images=img_tensor,
-                    text_prompts=[prompt] if prompt else None,
-                    confidence_threshold=threshold,
+        if self.use_samgeo:
+            # Use samgeo with text prompt
+            temp_input = "/tmp/input_image.png"
+            temp_output = "/tmp/sam_output.tif"
+            img.save(temp_input)
+            
+            if prompt:
+                self.model.generate(
+                    source=temp_input,
+                    output=temp_output,
+                    text_prompt=prompt,
                     box_threshold=box_threshold,
                     text_threshold=text_threshold
                 )
-                
-                masks = outputs["masks"].cpu().numpy()
+            else:
+                self.model.generate(
+                    source=temp_input,
+                    output=temp_output,
+                    batch=True
+                )
+            
+            # Load result
+            from rasterio import open as rio_open
+            try:
+                with rio_open(temp_output) as src:
+                    combined_mask = src.read(1).astype(np.uint8)
+            except:
+                combined_mask = np.zeros((h, w), dtype=np.uint8)
+        else:
+            # Ultralytics SAM
+            results = self.model(img_np, conf=threshold)
+            
+            combined_mask = np.zeros((h, w), dtype=np.uint8)
+            if results and len(results) > 0 and results[0].masks is not None:
+                masks = results[0].masks.data.cpu().numpy()
+                for i, mask in enumerate(masks):
+                    if mask.shape != (h, w):
+                        mask = cv2.resize(mask.astype(np.float32), (w, h)) > 0.5
+                    combined_mask = np.maximum(combined_mask, mask.astype(np.uint8) * (i + 1))
         
         # 3. Post-processing cleanup
-        combined_mask = np.zeros((h, w), dtype=np.uint8)
-        
-        for i, mask in enumerate(masks):
-            if mask.shape != (h, w):
-                mask = cv2.resize(mask.astype(np.float32), (w, h)) > 0.5
-            
-            mask = mask.astype(np.uint8)
-            
-            # Morphological cleanup
+        if np.any(combined_mask):
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            mask = cv2.medianBlur(mask, 3)
-            
-            combined_mask = np.maximum(combined_mask, mask * (i + 1))
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
         
         # 4. Create colored visualization mask
         mask_rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        # Cyan color for SAM 3 detections
-        mask_rgba[combined_mask > 0] = [0, 200, 200, 180]
+        mask_rgba[combined_mask > 0] = [0, 200, 200, 180]  # Cyan
         
         # 5. Vectorize to GeoJSON
         geojson_features = []
@@ -160,7 +150,7 @@ class Predictor(BasePredictor):
                     })
         
         feature_count = len(geojson_features)
-        print(f"Extracted {feature_count} features for concept: '{prompt}'")
+        print(f"Extracted {feature_count} features for: '{prompt}'")
         
         # 6. Save outputs
         out_mask_path = Path("/tmp/sam3_mask.png")
@@ -175,9 +165,9 @@ class Predictor(BasePredictor):
             json.dump(geojson_data, f)
         
         # Return results
-        results = []
+        results_list = []
         if feature_count > 0:
-            results.append({
+            results_list.append({
                 "feature_class": prompt if prompt else "detected_object",
                 "feature_count": feature_count,
                 "geojson": geojson_data,
@@ -187,5 +177,5 @@ class Predictor(BasePredictor):
         return {
             "mask": out_mask_path,
             "geojson": out_geojson_path,
-            "results": results
+            "results": results_list
         }
