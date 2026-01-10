@@ -23,20 +23,25 @@ import cv2
 
 class Predictor(BasePredictor):
     def setup(self):
-        """Load SAM 3 model weights from Hugging Face"""
+        """Load SAM 3 model weights from baked-in file"""
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
         
-        # Download SAM 3 weights from Hugging Face
-        from huggingface_hub import hf_hub_download
+        # SAM 3 weights are baked into the Docker image during build
+        # They are downloaded from HuggingFace in the GitHub Action workflow
+        model_path = "/src/sam3.pt"  # Baked into image by Cog
         
-        # SAM 3 checkpoint from Meta's official release
-        model_path = hf_hub_download(
-            repo_id="facebook/sam3",
-            filename="sam3.pt",
-            cache_dir="/tmp/sam3_cache"
-        )
-        print(f"SAM 3 weights downloaded to: {model_path}")
+        if not os.path.exists(model_path):
+            # Fallback: try current directory
+            model_path = "sam3.pt"
+        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                "SAM 3 weights not found. The model file should be baked into the Docker image during build. "
+                "Check the GitHub Action workflow."
+            )
+        
+        print(f"Loading SAM 3 weights from: {model_path}")
         
         # Load SAM 3 model
         # SAM 3 uses a DETR-based architecture with concept prompting

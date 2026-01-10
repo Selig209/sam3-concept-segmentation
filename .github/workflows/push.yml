@@ -28,5 +28,21 @@ jobs:
         run: |
           pip install huggingface_hub
           python -c "from huggingface_hub import login; login(token='${{ secrets.HUGGINGFACE_TOKEN }}')"
+      - name: Download SAM 3 Weights (Bake into image)
+        env:
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          python -c "
+          from huggingface_hub import hf_hub_download
+          import os
+          os.environ['HF_TOKEN'] = '${{ secrets.HUGGINGFACE_TOKEN }}'
+          path = hf_hub_download(repo_id='facebook/sam3', filename='sam3.pt', token='${{ secrets.HUGGINGFACE_TOKEN }}')
+          print(f'Downloaded to: {path}')
+          # Copy to working directory for cog to include
+          import shutil
+          shutil.copy(path, 'sam3.pt')
+          print('Copied sam3.pt to current directory')
+          "
+          ls -la sam3.pt
       - name: Push to Replicate
         run: cog push r8.im/selig/sam3-concept-segmentation
