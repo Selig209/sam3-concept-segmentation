@@ -23,8 +23,10 @@ jobs:
         with:
           token: ${{ secrets.REPLICATE_API_TOKEN }}
       - name: Login to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         run: |
           pip install huggingface_hub
-          echo "${{ secrets.HUGGINGFACE_TOKEN }}" | huggingface-cli login --token
+          python -c "from huggingface_hub import login; login(token='${{ secrets.HUGGINGFACE_TOKEN }}')"
       - name: Push to Replicate
         run: cog push r8.im/selig/sam3-concept-segmentation
