@@ -1,0 +1,30 @@
+name: Push SAM 3 to Replicate
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allow manual trigger
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+      - name: Setup Cog
+        uses: replicate/setup-cog@v2
+        with:
+          token: ${{ secrets.REPLICATE_API_TOKEN }}
+      - name: Login to Hugging Face
+        run: |
+          pip install huggingface_hub
+          echo "${{ secrets.HUGGINGFACE_TOKEN }}" | huggingface-cli login --token
+      - name: Push to Replicate
+        run: cog push r8.im/seligamoak/sam3-concept-segmentation

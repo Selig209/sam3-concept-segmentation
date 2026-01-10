@@ -1,0 +1,28 @@
+# SAM 3 Model for Text-Prompt Segmentation
+# Uses segment-geospatial (samgeo) for advanced segmentation
+
+build:
+  python_version: "3.11"
+  gpu: true
+  system_packages:
+    - "libgl1-mesa-glx"
+    - "libglib2.0-0"
+    - "libsm6"
+    - "libxext6"
+    - "libxrender-dev"
+    - "gdal-bin"
+    - "libgdal-dev"
+  python_packages:
+    - "torch>=2.0"
+    - "torchvision"
+    - "segment-geospatial>=0.11"
+    - "huggingface-hub"
+    - "shapely>=2.0"
+    - "rasterio>=1.3"
+    - "opencv-python-headless"
+    - "numpy"
+    - "pillow"
+    - "fiona"
+    - "geopandas"
+  
+predict: "predict.py:Predictor"
