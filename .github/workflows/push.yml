@@ -27,4 +27,4 @@ jobs:
           pip install huggingface_hub
           echo "${{ secrets.HUGGINGFACE_TOKEN }}" | huggingface-cli login --token
       - name: Push to Replicate
-        run: cog push r8.im/seligamoak/sam3-concept-segmentation
+        run: cog push r8.im/selig/sam3-concept-segmentation
