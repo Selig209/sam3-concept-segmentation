@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # Allow manual trigger
 jobs:
   push:
-    runs-on: ubuntu-latest-large  # Request larger runner if available
+    runs-on: ubuntu-latest  # Standard runner (free tier)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
