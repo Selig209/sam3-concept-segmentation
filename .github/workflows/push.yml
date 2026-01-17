@@ -6,43 +6,31 @@ on:
   workflow_dispatch: # Allow manual trigger
 jobs:
   push:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-large  # Request larger runner if available
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
+      
+      - name: Free Disk Space (Aggressive)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false  # Keep docker for cog
+          swap-storage: true
+      
+      - name: Show Available Space
+        run: df -h
+      
       - name: Setup Cog
         uses: replicate/setup-cog@v2
         with:
           token: ${{ secrets.REPLICATE_API_TOKEN }}
-      - name: Login to Hugging Face
-        env:
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        run: |
-          pip install huggingface_hub
-          python -c "from huggingface_hub import login; login(token='${{ secrets.HUGGINGFACE_TOKEN }}')"
-      - name: Download SAM 3 Weights (Bake into image)
-        env:
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        run: |
-          python -c "
-          from huggingface_hub import hf_hub_download
-          import os
-          os.environ['HF_TOKEN'] = '${{ secrets.HUGGINGFACE_TOKEN }}'
-          path = hf_hub_download(repo_id='facebook/sam3', filename='sam3.pt', token='${{ secrets.HUGGINGFACE_TOKEN }}')
-          print(f'Downloaded to: {path}')
-          # Copy to working directory for cog to include
-          import shutil
-          shutil.copy(path, 'sam3.pt')
-          print('Copied sam3.pt to current directory')
-          "
-          ls -la sam3.pt
+      
       - name: Push to Replicate
+        env:
+          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         run: cog push r8.im/selig/sam3-concept-segmentation

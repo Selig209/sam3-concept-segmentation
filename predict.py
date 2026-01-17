@@ -1,14 +1,11 @@
 """
 SAM 3 (Segment Anything Model 3) Predictor for Replicate/Cog
-Uses Meta's SAM 3 with Promptable Concept Segmentation (PCS)
+Uses official facebook/sam3 from HuggingFace Transformers (November 2025)
 
 SAM 3 Features:
-- Text prompt segmentation ("yellow school bus", "swimming pools")
-- Image exemplar prompts
-- Unified detection, segmentation, and tracking
-- Released November 2025 by Meta
-
-Weights are baked into the Docker image during build.
+- Native text prompt segmentation (no grounding model needed)
+- 0.9B parameters, improved architecture
+- Direct text-to-mask generation
 """
 
 from cog import BasePredictor, Input, Path
@@ -17,43 +14,27 @@ import numpy as np
 from PIL import Image
 import os
 import json
-from rasterio import features
+from shapely.geometry import shape, mapping
+from shapely.affinity import affine_transform
 import cv2
 
 class Predictor(BasePredictor):
     def setup(self):
-        """Load SAM 3 model weights from baked-in file"""
+        """Load SAM 3 model from HuggingFace"""
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
         
-        # SAM 3 weights are baked into the Docker image during build
-        model_path = "/src/sam3.pt"  # Baked into image by Cog
+        from transformers import Sam3Processor, Sam3Model
         
-        if not os.path.exists(model_path):
-            model_path = "sam3.pt"
+        # Load SAM 3 from HuggingFace
+        model_id = "facebook/sam3"
+        print(f"Loading {model_id}...")
         
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                "SAM 3 weights not found. The model file should be baked into the Docker image during build."
-            )
+        self.processor = Sam3Processor.from_pretrained(model_id)
+        self.model = Sam3Model.from_pretrained(model_id).to(self.device)
+        self.model.eval()
         
-        print(f"Loading SAM 3 weights from: {model_path}")
-        
-        # Try loading with segment-geospatial (samgeo)
-        try:
-            from samgeo import SamGeo2
-            self.model = SamGeo2(model_path)
-            self.use_samgeo = True
-            print("SAM 3 model loaded with samgeo")
-        except Exception as e:
-            print(f"samgeo failed: {e}")
-            # Fallback: Try using the Ultralytics implementation
-            print("Using Ultralytics SAM implementation...")
-            from ultralytics import SAM
-            self.model = SAM(model_path)
-            self.use_samgeo = False
-        
-        print("SAM 3 model loaded successfully")
+        print("SAM 3 loaded successfully")
             
     def predict(
         self,
@@ -62,97 +43,108 @@ class Predictor(BasePredictor):
             description="Describe objects to extract (e.g., 'buildings', 'swimming pools', 'solar panels')", 
             default=""
         ),
-        threshold: float = Input(description="Confidence threshold for detections", default=0.5),
-        box_threshold: float = Input(description="Box detection threshold", default=0.3),
-        text_threshold: float = Input(description="Text matching threshold", default=0.25)
+        threshold: float = Input(description="Confidence threshold for mask", default=0.5),
+        multimask_output: bool = Input(description="Return multiple mask options", default=False)
     ) -> dict:
         """
-        Run SAM 3 with Promptable Concept Segmentation (PCS)
+        Run SAM 3 segmentation with native text prompts
         """
         
         # 1. Load image
         img = Image.open(image).convert("RGB")
         img_np = np.array(img)
         h, w, _ = img_np.shape
-        print(f"Processing image: {w}x{h} with prompt: '{prompt}'")
+        print(f"Processing image: {w}x{h}")
         
-        # 2. Run SAM 3 inference
-        if self.use_samgeo:
-            # Use samgeo with text prompt
-            temp_input = "/tmp/input_image.png"
-            temp_output = "/tmp/sam_output.tif"
-            img.save(temp_input)
-            
-            if prompt:
-                self.model.generate(
-                    source=temp_input,
-                    output=temp_output,
-                    text_prompt=prompt,
-                    box_threshold=box_threshold,
-                    text_threshold=text_threshold
-                )
-            else:
-                self.model.generate(
-                    source=temp_input,
-                    output=temp_output,
-                    batch=True
-                )
-            
-            # Load result
-            from rasterio import open as rio_open
-            try:
-                with rio_open(temp_output) as src:
-                    combined_mask = src.read(1).astype(np.uint8)
-            except:
-                combined_mask = np.zeros((h, w), dtype=np.uint8)
+        if prompt:
+            print(f"Text prompt: '{prompt}'")
+        
+        # 2. Process inputs with SAM 3 (native text prompt support)
+        if prompt:
+            # SAM 3 supports direct text prompts
+            inputs = self.processor(
+                images=img,
+                text=prompt,
+                return_tensors="pt"
+            ).to(self.device)
         else:
-            # Ultralytics SAM
-            results = self.model(img_np, conf=threshold)
-            
-            combined_mask = np.zeros((h, w), dtype=np.uint8)
-            if results and len(results) > 0 and results[0].masks is not None:
-                masks = results[0].masks.data.cpu().numpy()
-                for i, mask in enumerate(masks):
-                    if mask.shape != (h, w):
-                        mask = cv2.resize(mask.astype(np.float32), (w, h)) > 0.5
-                    combined_mask = np.maximum(combined_mask, mask.astype(np.uint8) * (i + 1))
+            # Automatic mask generation without prompt
+            inputs = self.processor(
+                images=img,
+                return_tensors="pt"
+            ).to(self.device)
         
-        # 3. Post-processing cleanup
+        # 3. Run SAM 3 inference
+        with torch.no_grad():
+            outputs = self.model(**inputs, multimask_output=multimask_output)
+        
+        # 4. Post-process masks
+        masks = self.processor.post_process_masks(
+            outputs.pred_masks,
+            inputs["original_sizes"],
+            inputs["reshaped_input_sizes"]
+        )
+        
+        # Get the best mask
+        if len(masks) > 0 and len(masks[0]) > 0:
+            # Use IoU scores to select best mask
+            if hasattr(outputs, 'iou_scores'):
+                best_idx = outputs.iou_scores[0].argmax().item()
+                mask = masks[0][best_idx].cpu().numpy()
+            else:
+                mask = masks[0][0].cpu().numpy()
+            
+            # Apply threshold
+            combined_mask = (mask > threshold).astype(np.uint8)
+        else:
+            combined_mask = np.zeros((h, w), dtype=np.uint8)
+        
+        # 5. Post-processing cleanup
         if np.any(combined_mask):
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
             combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
         
-        # 4. Create colored visualization mask
+        # 6. Create colored visualization mask
         mask_rgba = np.zeros((h, w, 4), dtype=np.uint8)
         mask_rgba[combined_mask > 0] = [0, 200, 200, 180]  # Cyan
         
-        # 5. Vectorize to GeoJSON
+        # 7. Vectorize to GeoJSON using contours
         geojson_features = []
         
         if np.any(combined_mask):
-            shapes_generator = features.shapes(
-                combined_mask,
-                mask=combined_mask > 0,
-                transform=features.transform.Affine(1, 0, 0, 0, -1, h)
+            contours, _ = cv2.findContours(
+                combined_mask, 
+                cv2.RETR_EXTERNAL, 
+                cv2.CHAIN_APPROX_SIMPLIFY
             )
             
-            for geom, value in shapes_generator:
-                if value > 0:
-                    geojson_features.append({
-                        "type": "Feature",
-                        "properties": {
-                            "class": prompt if prompt else "detected_object",
-                            "instance_id": int(value),
-                            "confidence": float(threshold)
-                        },
-                        "geometry": geom
-                    })
+            for idx, contour in enumerate(contours):
+                if len(contour) >= 3:
+                    # Convert contour to polygon coordinates
+                    coords = contour.squeeze().tolist()
+                    if len(coords) >= 3:
+                        # Close the polygon
+                        if coords[0] != coords[-1]:
+                            coords.append(coords[0])
+                        
+                        geojson_features.append({
+                            "type": "Feature",
+                            "properties": {
+                                "class": prompt if prompt else "detected_object",
+                                "instance_id": idx + 1,
+                                "confidence": float(threshold)
+                            },
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [coords]
+                            }
+                        })
         
         feature_count = len(geojson_features)
         print(f"Extracted {feature_count} features for: '{prompt}'")
         
-        # 6. Save outputs
+        # 8. Save outputs
         out_mask_path = Path("/tmp/sam3_mask.png")
         Image.fromarray(mask_rgba).save(str(out_mask_path))
         
