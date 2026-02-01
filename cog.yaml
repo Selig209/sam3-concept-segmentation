@@ -21,5 +21,25 @@ build:
     - "shapely>=2.0"
     - "timm"
     - "supervision"
+  # Download models at build time (bake into image)
+  run:
+    - |
+      python -c "
+      from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, SamModel, SamProcessor
+      import os
+      
+      # Set HF token if available
+      token = os.environ.get('HUGGINGFACE_TOKEN') or os.environ.get('HF_TOKEN')
+      
+      print('Downloading GroundingDINO...')
+      AutoProcessor.from_pretrained('IDEA-Research/grounding-dino-base', token=token)
+      AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-dino-base', token=token)
+      
+      print('Downloading SAM...')
+      SamProcessor.from_pretrained('facebook/sam-vit-huge', token=token)
+      SamModel.from_pretrained('facebook/sam-vit-huge', token=token)
+      
+      print('Models downloaded successfully!')
+      "
 
 predict: "predict.py:Predictor"

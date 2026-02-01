@@ -33,4 +33,9 @@ jobs:
       - name: Push to Replicate
         env:
           HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        run: cog push r8.im/selig/sam3-concept-segmentation
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          # Export HF token for build-time model download
+          export HUGGINGFACE_TOKEN="${{ secrets.HUGGINGFACE_TOKEN }}"
+          export HF_TOKEN="${{ secrets.HUGGINGFACE_TOKEN }}"
+          cog push r8.im/selig/sam3-concept-segmentation
