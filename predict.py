@@ -42,8 +42,8 @@ class Predictor(BasePredictor):
             from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
             
             print("Loading GroundingDINO...")
-            # Use grounding-dino-tiny for faster loading and less memory
-            dino_model_id = "IDEA-Research/grounding-dino-tiny"
+            # Use grounding-dino-base for better accuracy (L4 GPU has 24GB VRAM)
+            dino_model_id = "IDEA-Research/grounding-dino-base"
             self.dino_processor = AutoProcessor.from_pretrained(
                 dino_model_id,
                 token=hf_token
@@ -65,8 +65,8 @@ class Predictor(BasePredictor):
             from transformers import SamModel, SamProcessor
             
             print("Loading SAM...")
-            # Use sam-vit-base for faster loading, vit-huge for better quality
-            sam_model_id = "facebook/sam-vit-base"
+            # Use sam-vit-huge for best quality masks (L4 GPU can handle it)
+            sam_model_id = "facebook/sam-vit-huge"
             self.sam_processor = SamProcessor.from_pretrained(
                 sam_model_id,
                 token=hf_token
