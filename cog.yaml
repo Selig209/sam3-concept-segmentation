@@ -23,23 +23,14 @@ build:
     - "supervision"
   # Download models at build time (bake into image)
   run:
-    - |
-      python -c "
-      from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, SamModel, SamProcessor
-      import os
-      
-      # Set HF token if available
-      token = os.environ.get('HUGGINGFACE_TOKEN') or os.environ.get('HF_TOKEN')
-      
-      print('Downloading GroundingDINO...')
-      AutoProcessor.from_pretrained('IDEA-Research/grounding-dino-base', token=token)
-      AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-dino-base', token=token)
-      
-      print('Downloading SAM...')
-      SamProcessor.from_pretrained('facebook/sam-vit-huge', token=token)
-      SamModel.from_pretrained('facebook/sam-vit-huge', token=token)
-      
-      print('Models downloaded successfully!')
-      "
+    - "echo 'Downloading GroundingDINO processor...'"
+    - "python -c \"from transformers import AutoProcessor; AutoProcessor.from_pretrained('IDEA-Research/grounding-dino-base')\""
+    - "echo 'Downloading GroundingDINO model...'"
+    - "python -c \"from transformers import AutoModelForZeroShotObjectDetection; AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-dino-base')\""
+    - "echo 'Downloading SAM processor...'"
+    - "python -c \"from transformers import SamProcessor; SamProcessor.from_pretrained('facebook/sam-vit-huge')\""
+    - "echo 'Downloading SAM model...'"
+    - "python -c \"from transformers import SamModel; SamModel.from_pretrained('facebook/sam-vit-huge')\""
+    - "echo 'All models downloaded successfully!'"
 
 predict: "predict.py:Predictor"
