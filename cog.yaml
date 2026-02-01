@@ -1,5 +1,5 @@
-# SAM 3 Model for Text-Prompt Segmentation
-# Uses official facebook/sam3 from HuggingFace Transformers (Nov 2025)
+# GroundingDINO + SAM Model for Text-Prompt Segmentation
+# Uses GroundingDINO for text-to-box detection, SAM for precise masks
 
 build:
   python_version: "3.11"
@@ -19,5 +19,7 @@ build:
     - "numpy"
     - "pillow"
     - "shapely>=2.0"
+    - "timm"
+    - "supervision"
 
 predict: "predict.py:Predictor"
