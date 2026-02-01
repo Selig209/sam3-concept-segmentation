@@ -23,6 +23,8 @@ import os
 import json
 import cv2
 from typing import List, Tuple, Optional
+import os
+import traceback
 
 class Predictor(BasePredictor):
     def setup(self):
@@ -30,35 +32,64 @@ class Predictor(BasePredictor):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
         
+        # Check for HuggingFace token (optional but helps with rate limits)
+        hf_token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+        if hf_token:
+            print("HuggingFace token found")
+        
         # Load GroundingDINO for text-to-box detection
-        # GeoAI uses grounding-dino-tiny for speed, we use base for accuracy
         try:
             from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
             
             print("Loading GroundingDINO...")
-            # Options: grounding-dino-tiny (faster) or grounding-dino-base (better)
-            dino_model_id = "IDEA-Research/grounding-dino-base"
-            self.dino_processor = AutoProcessor.from_pretrained(dino_model_id)
-            self.dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(dino_model_id).to(self.device)
+            # Use grounding-dino-tiny for faster loading and less memory
+            dino_model_id = "IDEA-Research/grounding-dino-tiny"
+            self.dino_processor = AutoProcessor.from_pretrained(
+                dino_model_id,
+                token=hf_token
+            )
+            self.dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(
+                dino_model_id,
+                token=hf_token
+            ).to(self.device)
             self.dino_model.eval()
-            print("GroundingDINO loaded successfully")
+            print(f"GroundingDINO loaded successfully: {dino_model_id}")
         except Exception as e:
             print(f"Error loading GroundingDINO: {e}")
+            traceback.print_exc()
             self.dino_model = None
+            self.dino_processor = None
         
         # Load SAM for precise segmentation
         try:
             from transformers import SamModel, SamProcessor
             
             print("Loading SAM...")
-            sam_model_id = "facebook/sam-vit-huge"
-            self.sam_processor = SamProcessor.from_pretrained(sam_model_id)
-            self.sam_model = SamModel.from_pretrained(sam_model_id).to(self.device)
+            # Use sam-vit-base for faster loading, vit-huge for better quality
+            sam_model_id = "facebook/sam-vit-base"
+            self.sam_processor = SamProcessor.from_pretrained(
+                sam_model_id,
+                token=hf_token
+            )
+            self.sam_model = SamModel.from_pretrained(
+                sam_model_id,
+                token=hf_token
+            ).to(self.device)
             self.sam_model.eval()
-            print("SAM loaded successfully")
+            print(f"SAM loaded successfully: {sam_model_id}")
         except Exception as e:
             print(f"Error loading SAM: {e}")
+            traceback.print_exc()
             self.sam_model = None
+            self.sam_processor = None
+        
+        # Final status
+        if self.dino_model is None or self.sam_model is None:
+            print("WARNING: One or more models failed to load!")
+            print(f"  GroundingDINO: {'OK' if self.dino_model else 'FAILED'}")
+            print(f"  SAM: {'OK' if self.sam_model else 'FAILED'}")
+        else:
+            print("All models loaded successfully!")
     
     def _generate_tiles(
         self, 
