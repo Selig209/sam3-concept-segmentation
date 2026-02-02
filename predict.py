@@ -162,16 +162,20 @@ class Predictor(BasePredictor):
         with torch.no_grad():
             dino_outputs = self.dino_model(**dino_inputs)
         
+        # Post-process without threshold args (new API)
         results = self.dino_processor.post_process_grounded_object_detection(
             dino_outputs,
             dino_inputs.input_ids,
-            box_threshold=threshold,
-            text_threshold=threshold,
             target_sizes=[(h, w)]
         )[0]
         
-        detected_boxes = results["boxes"].cpu().numpy()
-        detected_scores = results["scores"].cpu().numpy()
+        all_boxes = results["boxes"].cpu().numpy()
+        all_scores = results["scores"].cpu().numpy()
+        
+        # Filter by threshold manually
+        mask = all_scores >= threshold
+        detected_boxes = all_boxes[mask]
+        detected_scores = all_scores[mask]
         
         # SAM segmentation for each detected box
         for box, score in zip(detected_boxes, detected_scores):
@@ -322,16 +326,20 @@ class Predictor(BasePredictor):
                 with torch.no_grad():
                     dino_outputs = self.dino_model(**dino_inputs)
                 
+                # Post-process without threshold args (new API)
                 results = self.dino_processor.post_process_grounded_object_detection(
                     dino_outputs,
                     dino_inputs.input_ids,
-                    box_threshold=threshold,
-                    text_threshold=threshold,
                     target_sizes=[(h, w)]
                 )[0]
                 
-                boxes = results["boxes"].cpu().numpy()
-                scores = results["scores"].cpu().numpy()
+                all_boxes = results["boxes"].cpu().numpy()
+                all_scores = results["scores"].cpu().numpy()
+                
+                # Filter by threshold manually
+                mask = all_scores >= threshold
+                boxes = all_boxes[mask]
+                scores = all_scores[mask]
                 
                 print(f"GroundingDINO found {len(boxes)} objects")
                 
